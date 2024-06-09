@@ -8,6 +8,7 @@ import {
     MobilettoRedisConfig,
     MobilettoWriteSource,
     MobilettoVisitor,
+    MobilettoListOutput,
 } from "mobiletto-common";
 import { Queue, QueueEvents, Worker } from "bullmq";
 
@@ -46,7 +47,7 @@ export type MobilettoClient = MobilettoConnection & {
     mq?: MobilettoQueue;
     scopedCache: (cacheName: string, size?: number) => CacheLike;
     flush: () => Promise<void>;
-    driver_list: (path?: string, recursive?: boolean, visitor?: MobilettoVisitor) => Promise<MobilettoMetadata[]>;
+    driver_list: (path?: string, optsOrRecursive?: MobilettoListOptions, visitor?: MobilettoVisitor) => Promise<MobilettoListOutput>;
     driver_write: (path: string, data: MobilettoWriteSource) => Promise<number>;
     driver_metadata: (path: string) => Promise<MobilettoMetadata>;
     driver_remove: (path: string, recursive?: boolean, quiet?: boolean) => Promise<string | string[]>;

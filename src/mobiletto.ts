@@ -4,7 +4,7 @@ import { sha256 } from "zilla-util";
 import { Transform } from "stream";
 import { Job, Queue, QueueEvents, Worker } from "bullmq";
 
-import { M_FILE, M_DIR, isReadable, logger, MobilettoError, MobilettoNotFoundError, rand } from "mobiletto-common";
+import { M_FILE, M_DIR, isReadable, logger, MobilettoError, MobilettoNotFoundError, rand, MobilettoListOutput } from "mobiletto-common";
 
 import {
     MobilettoMinimalClient,
@@ -177,7 +177,7 @@ export async function mobiletto(
                     meta = await client.metadata(dd);
                 } catch (err) {
                     if (err instanceof MobilettoNotFoundError) {
-                        const contents = await client.list(dd);
+                        const {objects: contents} = await client.list(dd);
                         if (Array.isArray(contents) && contents.length > 0) {
                             return { name: path, type: M_DIR };
                         } else {
@@ -356,7 +356,7 @@ export async function mobiletto(
             pth = "",
             optsOrRecursive?: MobilettoListOptions | boolean,
             visitor?: MobilettoVisitor
-        ): Promise<MobilettoMetadata[]> => {
+        ): Promise<MobilettoListOutput> => {
             const p = pth === "" ? "." : pth.endsWith("/") ? pth.substring(0, pth.length - 1) : pth;
             const dirent = direntDir(p);
             let entries: MobilettoMetadata[];
@@ -370,7 +370,7 @@ export async function mobiletto(
             const cache = visitor ? null : client.scopedCache("enc_list");
             const cached: MobilettoMetadata[] | null | undefined = cache && (await cache.get(cacheKey));
 
-            function cacheAndReturn(thing: MobilettoMetadata[]): MobilettoMetadata[] {
+            function cacheAndReturn(thing: MobilettoListOutput): MobilettoListOutput {
                 if (cache) {
                     cache.set(cacheKey, thing).then(
                         () => {
@@ -388,18 +388,19 @@ export async function mobiletto(
                 p: string,
                 visitor?: MobilettoVisitor,
                 e?: Error | null
-            ): Promise<MobilettoMetadata[]> {
+            ): Promise<MobilettoListOutput> {
                 // it might be a single file, try listing the parent dir
                 const parentDirent = direntDir(dirname(p));
-                entries = await client.list(parentDirent);
-                const objects = await _loadMeta(parentDirent, entries);
+                const output = await client.list(parentDirent);
+                entries = output.objects;
+                const objects = await _loadMeta(parentDirent, output.objects);
                 const found = objects.find((o) => o.name === p);
                 if (found) {
                     if (visitor) {
                         await visitor(found);
                     }
                     if (logger.isDebugEnabled()) logger.debug(`tryParentDirForSingleFile(${p}) found ${found.name}`);
-                    return cacheAndReturn([found]);
+                    return cacheAndReturn({ objects: [found]});
                 }
                 if (logger.isDebugEnabled()) logger.debug(`tryParentDirForSingleFile(${p}) nothing found! e=${e}`);
                 throw e ? new MobilettoNotFoundError(p) : e;
@@ -409,7 +410,7 @@ export async function mobiletto(
                 entries = cached;
             } else {
                 try {
-                    entries = await _loadMeta(dirent, await client.list(dirent));
+                    entries = await _loadMeta(dirent, ((await client.list(dirent)).objects));
                 } catch (e) {
                     if (e instanceof MobilettoNotFoundError) {
                         if (p.includes("/")) {
@@ -429,7 +430,7 @@ export async function mobiletto(
                         const dir: MobilettoMetadata | undefined = dirs.shift();
                         if (!dir) continue;
                         const subdir = direntDir(dir.name);
-                        const subdirListing = await client.list(subdir);
+                        const {objects: subdirListing} = await client.list(subdir);
                         if (subdirListing && subdirListing.length > 0) {
                             const subdirEntries = await _loadMeta(subdir, subdirListing);
                             if (visitor) {
@@ -453,7 +454,7 @@ export async function mobiletto(
                         );
                     }
                     if (!entries || entries.length === 0) {
-                        return [];
+                        return {objects: []};
                     }
                 }
             }
@@ -471,14 +472,14 @@ export async function mobiletto(
                 );
             }
             if (!entries || entries.length === 0) {
-                return [];
+                return { objects: []};
             }
             if (visitor) {
                 for (const obj of entries) {
                     await visitor(obj);
                 }
             }
-            return entries;
+            return {objects: entries};
         },
         metadata: _metadata(client),
         read: async (path: string, callback: (chunk: Buffer) => void, endCallback?: () => void) => {
@@ -561,7 +562,7 @@ export async function mobiletto(
                     const dirent = direntDir(path);
                     let entries;
                     try {
-                        entries = await client.list(dirent);
+                        entries = (await client.list(dirent)).objects;
                     } catch (e) {
                         if (quiet) {
                             if (logger.isWarningEnabled())
@@ -602,8 +603,8 @@ export async function mobiletto(
             while (true) {
                 /* eslint-enable no-constant-condition */
                 try {
-                    const entries = await client.list(dirent);
-                    if (entries.length === 0) {
+                    const {objects} = await client.list(dirent);
+                    if (objects.length === 0) {
                         await removeDirentFile(parent);
                     }
                 } catch (e) {

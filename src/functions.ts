@@ -11,6 +11,7 @@ import {
     MobilettoWriteSource,
     MobilettoFeatureFlags,
     MobilettoFeatureFlagName,
+    MobilettoListOutput,
 } from "mobiletto-common";
 import { MobilettoClient, MobilettoConnection } from "./types.js";
 import { logger, M_DIR, M_FILE, MobilettoError, MobilettoNotFoundError, rand } from "mobiletto-common";
@@ -24,8 +25,8 @@ import { ALL_MQ } from "./mobiletto.js";
 
 async function mirrorDir(source: MobilettoConnection, sourcePath: string, visitor: MobilettoVisitor) {
     if (logger.isTraceEnabled()) logger.trace(`mirrorDir: mirroring dir: ${sourcePath}`);
-    const listing = await source.list(sourcePath, { recursive: false, visitor });
-    for (const obj of listing) {
+    const {objects} = await source.list(sourcePath, { recursive: false, visitor });
+    for (const obj of objects) {
         if (obj.type === M_DIR) {
             const dir = obj.name.startsWith(sourcePath) ? obj.name : sourcePath + obj.name;
             await mirrorDir(source, dir, visitor);
@@ -57,12 +58,12 @@ const UTILITY_FUNCTIONS: MobilettoFunctions = {
             path?: string,
             opts?: MobilettoListOptions | boolean,
             visitor?: MobilettoVisitor
-        ): Promise<MobilettoMetadata[]> => {
+        ): Promise<MobilettoListOutput> => {
             path ||= "";
             const cache = client.scopedCache("list");
             const cached = cache ? await cache.get(path) : null;
             if (cached) {
-                if (Array.isArray(cached)) {
+                if (typeof  cached ==='object' && cached.objects) {
                     return cached;
                 } else if (cached instanceof Error) {
                     throw cached;
@@ -72,31 +73,37 @@ const UTILITY_FUNCTIONS: MobilettoFunctions = {
             }
             const recursive = opts && (opts === true || (opts.recursive ? opts.recursive : false));
             visitor = visitor ? visitor : typeof opts === "object" && opts.visitor ? opts.visitor : undefined;
+
+            const paging = typeof opts === "object" && opts.paging;
+            const options = paging ? { paging, recursive } : recursive;
+            
             if (visitor && typeof visitor !== "function") {
                 throw new MobilettoError(`list: visitor is not a function: ${typeof visitor}`);
             }
             try {
                 // noinspection JSUnresolvedFunction
-                const results: MobilettoMetadata[] = await client.driver_list(path, recursive, visitor);
-                if (results) {
-                    if (results.length === 0 && isFlagEnabled(client, "list_tryMetaIfEmpty")) {
+                let output: MobilettoListOutput = await client.driver_list(path, options, visitor);
+                // const results: MobilettoMetadata[] = output && output.objects ? output : { objects: []};
+                if (output && output.objects) {
+                    if (output.objects.length === 0 && isFlagEnabled(client, "list_tryMetaIfEmpty")) {
                         // try single meta, is this a file?
                         try {
                             const singleFileMeta = await client.driver_metadata(path);
                             if (singleFileMeta) {
-                                results.push(singleFileMeta);
+                                // results.push(singleFileMeta);
+                                output = { objects: [singleFileMeta]}
                             }
                         } catch (sfmErrIgnored) {
                             // ignore error, we tried
                         }
                     }
                     if (cache) {
-                        cache.set(path, results).then(
+                        cache.set(path, output).then(
                             () => {
                                 if (logger.isDebugEnabled())
                                     logger.debug(
                                         `list(${path}) cached ${
-                                            results ? results.length : `unknown? ${JSON.stringify(results)}`
+                                            output ? output.objects.length : `unknown? ${JSON.stringify(output)}`
                                         } results`
                                     );
                             },
@@ -106,7 +113,7 @@ const UTILITY_FUNCTIONS: MobilettoFunctions = {
                         );
                     }
                 }
-                return results;
+                return output;
             } catch (e) {
                 if (cache && e instanceof MobilettoNotFoundError) {
                     cache.set(path, e).then(
